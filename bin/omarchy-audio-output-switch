@@ -56,35 +56,57 @@ if (( sinks_count == 1 )); then
 
   # Only switch to a profile the card reports as available, so unplugging the
   # HDMI display cannot strand the machine on an output with nothing attached.
+  # pactl 17 reports availability as a JSON boolean; accept "yes" as well rather
+  # than have the switch quietly do nothing if that ever changes.
   if [[ -n $next_profile ]] &&
-    jq -e --arg p "$next_profile" '.profiles[$p].available == true' <<<"$card_json" >/dev/null 2>&1; then
+    jq -e --arg p "$next_profile" '(.profiles[$p].available // false) | . == true or . == "yes"' <<<"$card_json" >/dev/null 2>&1; then
 
-    if [[ $(timeout 2 pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null) == *yes ]]; then
+    previous_sink=$(timeout 2 pactl get-default-sink 2>/dev/null)
+
+    if [[ $(timeout 2 pactl get-sink-mute "$previous_sink" 2>/dev/null) == *yes ]]; then
       was_muted=true
     else
       was_muted=false
     fi
 
-    if [[ $(timeout 2 omarchy-shell media status 2>/dev/null | jq -r '.playing // false' 2>/dev/null) == true ]]; then
+    # Remember which player is playing, not merely that one is: the pause below
+    # can hand the shell's active-player spot to a second player.
+    media_before=$(timeout 2 omarchy-shell media status 2>/dev/null)
+    if [[ $(jq -r '.playing // false' <<<"$media_before" 2>/dev/null) == true ]]; then
       was_playing=true
+      playing_id=$(jq -r '[.identity, .title] | @tsv' <<<"$media_before" 2>/dev/null)
     else
       was_playing=false
     fi
 
     if timeout 2 pactl set-card-profile "$card" "$next_profile" 2>/dev/null; then
-      # The profile brings a fresh sink that defaults to unmuted, and it takes a
-      # moment to register, so wait for it before restoring the mute state.
-      for _ in {1..20}; do
-        [[ -n $(timeout 2 pactl get-default-sink 2>/dev/null) ]] && break
+      # The profile swap destroys the old sink and builds a new one. Wait for the
+      # default to move off the old sink rather than for a nonempty name: the old
+      # name keeps resolving while the replacement registers, so a nonempty check
+      # ends the wait immediately and the mute below lands on a sink on its way
+      # out, silently leaving the new one unmuted.
+      new_sink=$previous_sink
+      for _ in {1..40}; do
+        new_sink=$(timeout 2 pactl get-default-sink 2>/dev/null)
+        [[ -n $new_sink && $new_sink != "$previous_sink" ]] && break
         sleep 0.05
       done
 
-      [[ $was_muted == true ]] && timeout 2 pactl set-sink-mute @DEFAULT_SINK@ 1 2>/dev/null
+      [[ $was_muted == true ]] && timeout 2 pactl set-sink-mute "$new_sink" 1 2>/dev/null
 
       omarchy-osd -i "$profile_icon" -m "$profile_message"
 
-      # Tearing down the old sink pauses whatever was playing through it.
-      [[ $was_playing == true ]] && { sleep 0.5; omarchy-shell -q media play >/dev/null 2>&1; }
+      # Tearing down the old sink pauses whatever was playing through it. `media
+      # play` acts on whichever player the shell considers active and takes no
+      # target, so resume only while that is still the player we interrupted --
+      # otherwise a second player, perhaps paused on purpose, would start.
+      if [[ $was_playing == true ]]; then
+        sleep 0.5
+        media_after=$(timeout 2 omarchy-shell media status 2>/dev/null)
+        if [[ $(jq -r '[.identity, .title] | @tsv' <<<"$media_after" 2>/dev/null) == "$playing_id" ]]; then
+          omarchy-shell -q media play >/dev/null 2>&1
+        fi
+      fi
 
       exit 0
     fi
