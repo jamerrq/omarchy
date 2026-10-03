@@ -6,29 +6,36 @@ sinks=$(pactl -f json list sinks | jq '[.[] | select((.ports | length == 0) or (
 sinks_count=$(echo "$sinks" | jq '. | length')
 
 if (( sinks_count <= 1 )); then
-  first_card=$(pactl -f json list cards | jq -r '[.[] | select(.name | startswith("alsa_card"))][0].name')
-  
-  if [[ -n $first_card ]] && [[ $first_card != "null" ]]; then
-    active_profile=$(pactl -f json list cards | jq -r ".[] | select(.name == \"$first_card\") | .active_profile")
-    
+  # Swap only the output half of the profile, on the card behind the lone sink, and only to a profile with something plugged in
+  sink_card=$(echo "$sinks" | jq -r '.[0].properties."device.name" // empty')
+  card_swap=$(pactl -f json list cards | jq -r --arg card "$sink_card" '
+    [.[] | select((.name | startswith("alsa_card")) and ($card == "" or .name == $card))
+      | .active_profile as $active
+      | (if ($active | contains("output:analog-stereo")) then ($active | sub("output:analog-stereo"; "output:hdmi-stereo"))
+         elif ($active | contains("output:hdmi-stereo")) then ($active | sub("output:hdmi-stereo"; "output:analog-stereo"))
+         else empty end) as $profile
+      | select(.profiles[$profile].available == true)
+      | "\(.name)\t\($profile)"][0] // empty')
+
+  if [[ -n $card_swap ]]; then
+    IFS=$'\t' read -r card next_profile <<<"$card_swap"
+
     was_playing=false
     if command -v playerctl >/dev/null 2>&1 && [[ $(playerctl status 2>/dev/null) == "Playing" ]]; then
       was_playing=true
     fi
 
-    if [[ $active_profile == *"analog-stereo"* ]]; then
-      if pactl set-card-profile "$first_card" "output:hdmi-stereo" 2>/dev/null; then
-        swayosd-client \
-          --monitor "$focused_monitor" \
+    if [[ $next_profile == *"output:hdmi-stereo"* ]]; then
+      if pactl set-card-profile "$card" "$next_profile" 2>/dev/null; then
+        omarchy-swayosd-client \
           --custom-message "Digital Output (HDMI)" \
           --custom-icon "video-display"
         [[ $was_playing == true ]] && sleep 0.5 && playerctl play >/dev/null 2>&1
         exit 0
       fi
-    elif [[ $active_profile == *"hdmi-stereo"* ]]; then
-      if pactl set-card-profile "$first_card" "output:analog-stereo" 2>/dev/null; then
-        swayosd-client \
-          --monitor "$focused_monitor" \
+    else
+      if pactl set-card-profile "$card" "$next_profile" 2>/dev/null; then
+        omarchy-swayosd-client \
           --custom-message "Analog Output (Headphones)" \
           --custom-icon "audio-headphones"
         [[ $was_playing == true ]] && sleep 0.5 && playerctl play >/dev/null 2>&1
