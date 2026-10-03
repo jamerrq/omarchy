@@ -61,14 +61,6 @@ if (( sinks_count == 1 )); then
   if [[ -n $next_profile ]] &&
     jq -e --arg p "$next_profile" '(.profiles[$p].available // false) | . == true or . == "yes"' <<<"$card_json" >/dev/null 2>&1; then
 
-    previous_sink=$(timeout 2 pactl get-default-sink 2>/dev/null)
-
-    if [[ $(timeout 2 pactl get-sink-mute "$previous_sink" 2>/dev/null) == *yes ]]; then
-      was_muted=true
-    else
-      was_muted=false
-    fi
-
     # Remember which player is playing, not merely that one is: the pause below
     # can hand the shell's active-player spot to a second player.
     media_before=$(timeout 2 omarchy-shell media status 2>/dev/null)
@@ -80,20 +72,11 @@ if (( sinks_count == 1 )); then
     fi
 
     if timeout 2 pactl set-card-profile "$card" "$next_profile" 2>/dev/null; then
-      # The profile swap destroys the old sink and builds a new one. Wait for the
-      # default to move off the old sink rather than for a nonempty name: the old
-      # name keeps resolving while the replacement registers, so a nonempty check
-      # ends the wait immediately and the mute below lands on a sink on its way
-      # out, silently leaving the new one unmuted.
-      new_sink=$previous_sink
-      for _ in {1..40}; do
-        new_sink=$(timeout 2 pactl get-default-sink 2>/dev/null)
-        [[ -n $new_sink && $new_sink != "$previous_sink" ]] && break
-        sleep 0.05
-      done
-
-      [[ $was_muted == true ]] && timeout 2 pactl set-sink-mute "$new_sink" 1 2>/dev/null
-
+      # Mute is deliberately left alone. WirePlumber restores each sink's own
+      # remembered mute when the profile brings that sink back, asynchronously
+      # and after this script could set it, so carrying mute across the switch
+      # both loses the race and fights a policy that already does the right
+      # thing. Rotating between sinks above does not touch mute either.
       omarchy-osd -i "$profile_icon" -m "$profile_message"
 
       # Tearing down the old sink pauses whatever was playing through it. `media
