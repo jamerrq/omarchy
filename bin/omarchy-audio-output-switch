@@ -105,11 +105,16 @@ if (( sinks_count == 1 )); then
         # playing, skips the resume, and leaves playback stopped when the pause
         # lands. Nothing to resume if it never pauses, which also happens.
         #
+        # One second of watching is well over twice the measured delay, and the
+        # pause is usually there on the first look. The full window only runs
+        # when playback survives the swap, by which point the profile is set and
+        # the OSD is up, and the keybind that started this waits on neither.
+        #
         # `media play` takes no target and acts on whichever player the shell
         # considers active, so give up the moment that is a different player.
         resume=false
         first_look=true
-        for _ in {1..15}; do
+        for _ in {1..10}; do
           media_after=$(timeout 2 omarchy-shell media status 2>/dev/null)
           [[ $(jq -r '.identity // ""' <<<"$media_after" 2>/dev/null) == "$playing_identity" ]] || break
 
