@@ -98,15 +98,16 @@ if (( sinks_count == 1 )); then
           sleep 0.05
         done
 
-        # The app's pause reaches the shell a few hundred milliseconds after its
-        # sink goes away -- 200ms to 400ms on the hardware this was written for,
-        # well after the replacement sink is already the default -- so watch for
-        # it rather than sampling once. Sampling once reads the player as still
-        # playing, skips the resume, and leaves playback stopped when the pause
-        # lands. Nothing to resume if it never pauses, which also happens.
+        # The app's pause reaches the shell shortly after its sink goes away,
+        # measured at 26ms to 86ms over eight switches on the hardware this was
+        # written for, and after the replacement sink is already the default --
+        # so watch for it rather than sampling once. Sampling once can read the
+        # player as still playing, skip the resume, and leave playback stopped
+        # when the pause lands. Nothing to resume if it never pauses, which also
+        # happens.
         #
-        # One second of watching is well over twice the measured delay, and the
-        # pause is usually there on the first look. The full window only runs
+        # One second of watching is more than ten times that measured delay, and
+        # the pause is usually there on the first look. The full window only runs
         # when playback survives the swap, by which point the profile is set and
         # the OSD is up, and the keybind that started this waits on neither.
         #
